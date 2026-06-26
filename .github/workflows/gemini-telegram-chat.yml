@@ -1,0 +1,85 @@
+name: Gemini Telegram chat bot
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Poll Telegram without sending replies or calling Gemini"
+        required: false
+        default: "false"
+      monitoring_cycles:
+        description: "Manual-run polling cycles. Scheduled runs always use 10 cycles."
+        required: false
+        default: "1"
+      continue_monitoring:
+        description: "Dispatch the next chat polling run when this one finishes."
+        required: false
+        default: "false"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gemini-telegram-chat
+  cancel-in-progress: false
+
+jobs:
+  chat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      CONTINUE_MONITORING: ${{ github.event_name == 'schedule' && 'true' || inputs.continue_monitoring || 'false' }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Poll Telegram and answer with Gemini
+        env:
+          GEMINI_TELEGRAM_BOT_TOKEN: ${{ secrets.GEMINI_TELEGRAM_BOT_TOKEN }}
+          GEMINI_TELEGRAM_CHAT_ID: ${{ secrets.GEMINI_TELEGRAM_CHAT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          CONFIG_PATH: config/gemini_chat.json
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+          MONITORING_CYCLES: ${{ github.event_name == 'schedule' && '10' || inputs.monitoring_cycles || '1' }}
+          MONITORING_INTERVAL_SECONDS: "30"
+        run: |
+          for cycle in $(seq 1 "$MONITORING_CYCLES"); do
+            echo "Chat polling cycle ${cycle}/${MONITORING_CYCLES}"
+            python3 scripts/gemini_chat_bot.py
+            if [ "$cycle" -lt "$MONITORING_CYCLES" ]; then
+              sleep "$MONITORING_INTERVAL_SECONDS"
+            fi
+          done
+
+      - name: Persist Telegram chat bot settings
+        run: |
+          if ! git diff --quiet -- config/gemini_chat.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add config/gemini_chat.json
+            git commit -m "Update Gemini chat bot settings"
+            git push
+          fi
+
+      - name: Dispatch next chat polling run
+        if: ${{ always() && env.CONTINUE_MONITORING == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GEMINI_GH_WORKFLOW_PAT || secrets.GH_WORKFLOW_PAT }}
+        run: |
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "No workflow PAT configured; skipping self-dispatch."
+            exit 0
+          fi
+          gh workflow run gemini-telegram-chat.yml \
+            --ref main \
+            -f dry_run=false \
+            -f monitoring_cycles=10 \
+            -f continue_monitoring=true
