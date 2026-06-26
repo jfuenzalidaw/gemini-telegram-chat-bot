@@ -15,6 +15,7 @@ class GeminiChatBotTests(unittest.TestCase):
         self.assertIsNone(prompt)
         self.assertIn("/pause", reply)
         self.assertIn("/model gemini-2.5-flash", reply)
+        self.assertIn("/quota", reply)
         self.assertIn("never sent to Gemini", reply)
 
     def test_pause_blocks_regular_chat(self):
@@ -56,6 +57,23 @@ class GeminiChatBotTests(unittest.TestCase):
         self.assertIsNone(prompt)
         self.assertIn("without a leading /", reply)
 
+    def test_quota_command_reports_remaining_bot_tracked_usage(self):
+        config = gemini_chat_bot.ChatConfig(
+            daily_request_limit=250,
+            quota_date=gemini_chat_bot.current_quota_date(),
+            quota_requests=3,
+            quota_prompt_tokens=100,
+            quota_output_tokens=50,
+            quota_total_tokens=150,
+        )
+
+        reply, prompt = gemini_chat_bot.update_config_from_command(config, "/quota")
+
+        self.assertIsNone(prompt)
+        self.assertIn("3 of 250", reply)
+        self.assertIn("247 remaining", reply)
+        self.assertIn("150 total", reply)
+
     def test_generate_gemini_reply_sends_expected_request(self):
         config = gemini_chat_bot.ChatConfig(model="gemini-2.5-flash")
         captured = {}
@@ -64,7 +82,14 @@ class GeminiChatBotTests(unittest.TestCase):
             captured["url"] = url
             captured["headers"] = headers
             captured["body"] = data.decode("utf-8")
-            return {"candidates": [{"content": {"parts": [{"text": "answer"}]}}]}
+            return {
+                "candidates": [{"content": {"parts": [{"text": "answer"}]}}],
+                "usageMetadata": {
+                    "promptTokenCount": 2,
+                    "candidatesTokenCount": 3,
+                    "totalTokenCount": 5,
+                },
+            }
 
         reply = gemini_chat_bot.generate_gemini_reply("secret", config, "hello", requester)
 
@@ -72,6 +97,19 @@ class GeminiChatBotTests(unittest.TestCase):
         self.assertIn("/models/gemini-2.5-flash:generateContent", captured["url"])
         self.assertEqual(captured["headers"]["x-goog-api-key"], "secret")
         self.assertIn("hello", captured["body"])
+
+    def test_record_gemini_usage_updates_daily_quota_counters(self):
+        config = gemini_chat_bot.ChatConfig(quota_date=gemini_chat_bot.current_quota_date())
+
+        gemini_chat_bot.record_gemini_usage(
+            config,
+            gemini_chat_bot.GeminiUsage(prompt_tokens=2, output_tokens=3, total_tokens=5),
+        )
+
+        self.assertEqual(config.quota_requests, 1)
+        self.assertEqual(config.quota_prompt_tokens, 2)
+        self.assertEqual(config.quota_output_tokens, 3)
+        self.assertEqual(config.quota_total_tokens, 5)
 
     def test_process_updates_advances_offset_for_ignored_chats(self):
         config = gemini_chat_bot.ChatConfig()
@@ -100,6 +138,12 @@ class GeminiChatBotTests(unittest.TestCase):
             enabled=False,
             model="gemini-2.0-flash",
             system_instruction="Be brief.",
+            daily_request_limit=100,
+            quota_date="2026-06-26",
+            quota_requests=5,
+            quota_prompt_tokens=10,
+            quota_output_tokens=20,
+            quota_total_tokens=30,
         )
 
         with tempfile.TemporaryDirectory() as tmp:

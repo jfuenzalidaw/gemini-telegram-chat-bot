@@ -42,12 +42,15 @@ Do not commit raw tokens, chat IDs, API keys, or passwords. If a key or token wa
 /pause
 /resume
 /model gemini-2.5-flash
+/quota
 ```
 
 Normal text messages are sent to Gemini and answered in Telegram.
 Messages starting with `/` are handled as commands and are never sent to Gemini.
 
-Conversation history is not stored in the repository. The config file stores only the Telegram update offset, enabled state, selected model, and default system instruction.
+Conversation history is not stored in the repository. The config file stores only the Telegram update offset, enabled state, selected model, default system instruction, and bot-tracked daily quota counters.
+
+`/quota` reports requests and tokens used by this bot today, compared with the configured daily request limit in `config/gemini_chat.json`. Gemini quotas are enforced per Google Cloud project, so this command does not include usage from AI Studio, other apps, or other API keys in the same project.
 
 ## Local Test
 
