@@ -14,7 +14,7 @@ class GeminiChatBotTests(unittest.TestCase):
 
         self.assertIsNone(prompt)
         self.assertIn("/pause", reply)
-        self.assertIn("/model gemini-2.5-flash", reply)
+        self.assertIn("/model gemini-2.0-flash", reply)
         self.assertIn("/quota", reply)
         self.assertIn("never sent to Gemini", reply)
 
@@ -75,7 +75,7 @@ class GeminiChatBotTests(unittest.TestCase):
         self.assertIn("150 total", reply)
 
     def test_generate_gemini_reply_sends_expected_request(self):
-        config = gemini_chat_bot.ChatConfig(model="gemini-2.5-flash")
+        config = gemini_chat_bot.ChatConfig(model="gemini-2.0-flash")
         captured = {}
 
         def requester(url, data, headers):
@@ -94,7 +94,7 @@ class GeminiChatBotTests(unittest.TestCase):
         reply = gemini_chat_bot.generate_gemini_reply("secret", config, "hello", requester)
 
         self.assertEqual(reply, "answer")
-        self.assertIn("/models/gemini-2.5-flash:generateContent", captured["url"])
+        self.assertIn("/models/gemini-2.0-flash:generateContent", captured["url"])
         self.assertEqual(captured["headers"]["x-goog-api-key"], "secret")
         self.assertIn("hello", captured["body"])
 

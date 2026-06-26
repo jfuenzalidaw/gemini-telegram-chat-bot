@@ -41,7 +41,7 @@ Do not commit raw tokens, chat IDs, API keys, or passwords. If a key or token wa
 /status
 /pause
 /resume
-/model gemini-2.5-flash
+/model gemini-2.0-flash
 /quota
 ```
 

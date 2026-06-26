@@ -1,7 +1,7 @@
 {
   "daily_request_limit": 250,
   "enabled": true,
-  "model": "gemini-2.5-flash",
+  "model": "gemini-2.0-flash",
   "quota_date": "2026-06-26",
   "quota_output_tokens": 45,
   "quota_prompt_tokens": 23,

@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 
 
 DEFAULT_CONFIG_PATH = "config/gemini_chat.json"
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "gemini-2.0-flash"
 DEFAULT_DAILY_REQUEST_LIMIT = 250
 DEFAULT_SYSTEM_INSTRUCTION = (
     "You are a concise Telegram assistant. Answer directly and ask a clarifying "
@@ -69,7 +69,7 @@ def normalize_model(raw_model: str) -> str:
     if model.startswith("models/"):
         model = model.removeprefix("models/")
     if not MODEL_PATTERN.fullmatch(model):
-        raise ValueError("Use a Gemini model id like gemini-2.5-flash.")
+        raise ValueError("Use a Gemini model id like gemini-2.0-flash.")
     return model
 
 
@@ -243,7 +243,7 @@ def build_help_message(config: ChatConfig) -> str:
             "/status",
             "/pause",
             "/resume",
-            "/model gemini-2.5-flash",
+            "/model gemini-2.0-flash",
             "/quota",
             "",
             "Send any normal text message to chat with Gemini.",
@@ -312,7 +312,7 @@ def update_config_from_command(config: ChatConfig, text: str) -> tuple[str, str 
 
     if command == "/model":
         if not arg:
-            return f"Current model: {config.model}\nUsage: /model gemini-2.5-flash", None
+            return f"Current model: {config.model}\nUsage: /model gemini-2.0-flash", None
         try:
             config.model = normalize_model(arg)
         except ValueError as exc:
