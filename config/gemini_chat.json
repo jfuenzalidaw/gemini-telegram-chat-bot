@@ -2,11 +2,11 @@
   "daily_request_limit": 250,
   "enabled": true,
   "model": "gemini-2.5-flash",
-  "quota_date": null,
-  "quota_output_tokens": 0,
-  "quota_prompt_tokens": 0,
-  "quota_requests": 0,
-  "quota_total_tokens": 0,
+  "quota_date": "2026-06-26",
+  "quota_output_tokens": 45,
+  "quota_prompt_tokens": 23,
+  "quota_requests": 1,
+  "quota_total_tokens": 190,
   "system_instruction": "You are a concise Telegram assistant. Answer directly and ask a clarifying question only when needed.",
-  "telegram_update_offset": 50791671
+  "telegram_update_offset": 50791672
 }
