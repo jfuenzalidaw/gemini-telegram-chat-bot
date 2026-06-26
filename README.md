@@ -42,10 +42,10 @@ Do not commit raw tokens, chat IDs, API keys, or passwords. If a key or token wa
 /pause
 /resume
 /model gemini-2.5-flash
-/ask your question
 ```
 
 Normal text messages are sent to Gemini and answered in Telegram.
+Messages starting with `/` are handled as commands and are never sent to Gemini.
 
 Conversation history is not stored in the repository. The config file stores only the Telegram update offset, enabled state, selected model, and default system instruction.
 
@@ -65,4 +65,3 @@ GEMINI_TELEGRAM_CHAT_ID="your-chat-id" \
 DRY_RUN=true \
 python3 scripts/gemini_chat_bot.py
 ```
-

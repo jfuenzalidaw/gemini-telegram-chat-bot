@@ -169,9 +169,9 @@ def build_help_message(config: ChatConfig) -> str:
             "/pause",
             "/resume",
             "/model gemini-2.5-flash",
-            "/ask your question",
             "",
             "Send any normal text message to chat with Gemini.",
+            "Messages starting with / are handled as commands and are never sent to Gemini.",
         ]
     )
 
@@ -216,11 +216,7 @@ def update_config_from_command(config: ChatConfig, text: str) -> tuple[str, str 
         return f"Model set to {config.model}.", None
 
     if command == "/ask":
-        if not arg:
-            return "Usage: /ask your question", None
-        if not config.enabled:
-            return "The bot is paused. Send /resume to chat again.", None
-        return "", arg
+        return "Send normal text without a leading / to chat with Gemini.", None
 
     if command.startswith("/"):
         return "Unknown command. Send /help to see available commands.", None

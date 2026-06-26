@@ -15,6 +15,7 @@ class GeminiChatBotTests(unittest.TestCase):
         self.assertIsNone(prompt)
         self.assertIn("/pause", reply)
         self.assertIn("/model gemini-2.5-flash", reply)
+        self.assertIn("never sent to Gemini", reply)
 
     def test_pause_blocks_regular_chat(self):
         config = gemini_chat_bot.ChatConfig()
@@ -46,6 +47,14 @@ class GeminiChatBotTests(unittest.TestCase):
 
         self.assertEqual(reply, "")
         self.assertEqual(prompt, "What is Python?")
+
+    def test_slash_commands_are_never_sent_to_gemini(self):
+        config = gemini_chat_bot.ChatConfig()
+
+        reply, prompt = gemini_chat_bot.update_config_from_command(config, "/ask What is Python?")
+
+        self.assertIsNone(prompt)
+        self.assertIn("without a leading /", reply)
 
     def test_generate_gemini_reply_sends_expected_request(self):
         config = gemini_chat_bot.ChatConfig(model="gemini-2.5-flash")
