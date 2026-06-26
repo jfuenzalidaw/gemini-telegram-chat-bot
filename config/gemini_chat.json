@@ -2,5 +2,5 @@
   "enabled": true,
   "model": "gemini-2.5-flash",
   "system_instruction": "You are a concise Telegram assistant. Answer directly and ask a clarifying question only when needed.",
-  "telegram_update_offset": null
+  "telegram_update_offset": 50791668
 }
