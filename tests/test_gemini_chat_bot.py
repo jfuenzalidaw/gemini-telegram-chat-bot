@@ -74,6 +74,45 @@ class GeminiChatBotTests(unittest.TestCase):
         self.assertIn("247 remaining", reply)
         self.assertIn("150 total", reply)
 
+    def test_quota_command_uses_project_quota_builder_when_available(self):
+        config = gemini_chat_bot.ChatConfig()
+
+        reply, prompt = gemini_chat_bot.update_config_from_command(
+            config,
+            "/quota",
+            project_quota_builder=lambda: "project quota",
+        )
+
+        self.assertIsNone(prompt)
+        self.assertEqual(reply, "project quota")
+
+    def test_format_project_quota_message_includes_model_limits(self):
+        config = gemini_chat_bot.ChatConfig(
+            google_cloud_project_id="project-id",
+            google_quota_project_id="quota-project",
+        )
+        stats = [
+            gemini_chat_bot.ProjectQuotaStat(
+                model="gemini-2.5-flash",
+                rpm_usage=1,
+                rpm_limit=5,
+                tpm_usage=30,
+                tpm_limit=250000,
+                rpd_usage=3,
+                rpd_limit=20,
+            )
+        ]
+
+        reply = gemini_chat_bot.format_project_quota_message(config, stats)
+
+        self.assertIn("project-wide", reply)
+        self.assertIn("Project: project-id", reply)
+        self.assertIn("Quota project: quota-project", reply)
+        self.assertIn("gemini-2.5-flash", reply)
+        self.assertIn("RPM: 1 / 5 (4 remaining)", reply)
+        self.assertIn("TPM: 30 / 250,000 (249,970 remaining)", reply)
+        self.assertIn("RPD: 3 / 20 (17 remaining)", reply)
+
     def test_generate_gemini_reply_sends_expected_request(self):
         config = gemini_chat_bot.ChatConfig(model="gemini-2.0-flash")
         captured = {}
@@ -138,6 +177,8 @@ class GeminiChatBotTests(unittest.TestCase):
             enabled=False,
             model="gemini-2.0-flash",
             system_instruction="Be brief.",
+            google_cloud_project_id="project-id",
+            google_quota_project_id="quota-project",
             daily_request_limit=100,
             quota_date="2026-06-26",
             quota_requests=5,

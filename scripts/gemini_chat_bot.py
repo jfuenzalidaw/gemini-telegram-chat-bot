@@ -6,11 +6,16 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
+import tempfile
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
+from base64 import urlsafe_b64encode
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
@@ -19,15 +24,38 @@ from zoneinfo import ZoneInfo
 DEFAULT_CONFIG_PATH = "config/gemini_chat.json"
 DEFAULT_MODEL = "gemini-2.0-flash"
 DEFAULT_DAILY_REQUEST_LIMIT = 250
+DEFAULT_GOOGLE_CLOUD_PROJECT_ID = "gen-lang-client-0857616622"
+DEFAULT_GOOGLE_QUOTA_PROJECT_ID = "operations-499021"
 DEFAULT_SYSTEM_INSTRUCTION = (
     "You are a concise Telegram assistant. Answer directly and ask a clarifying "
     "question only when needed."
 )
 QUOTA_TIMEZONE = ZoneInfo("America/Los_Angeles")
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
+MONITORING_TIME_SERIES_URL = "https://monitoring.googleapis.com/v3/projects/{project}/timeSeries"
 TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/{method}"
 MODEL_PATTERN = re.compile(r"[A-Za-z0-9_.-]{1,80}")
 TELEGRAM_MESSAGE_LIMIT = 3900
+PROJECT_QUOTA_DAYS = 28
+UNLIMITED_QUOTA_VALUE = 9_000_000_000_000_000_000
+PROJECT_QUOTA_METRICS = {
+    "request_usage": "generativelanguage.googleapis.com/quota/generate_content_free_tier_requests/usage",
+    "request_limit": "generativelanguage.googleapis.com/quota/generate_content_free_tier_requests/limit",
+    "token_usage": (
+        "generativelanguage.googleapis.com/quota/"
+        "generate_content_free_tier_input_token_count/usage"
+    ),
+    "token_limit": (
+        "generativelanguage.googleapis.com/quota/"
+        "generate_content_free_tier_input_token_count/limit"
+    ),
+}
+LIMIT_NAME_TO_QUOTA_KIND = {
+    "GenerateRequestsPerMinutePerProjectPerModel-FreeTier": "rpm",
+    "GenerateRequestsPerDayPerProjectPerModel-FreeTier": "rpd",
+    "GenerateContentInputTokensPerModelPerMinute-FreeTier": "tpm",
+}
 
 
 @dataclass
@@ -44,11 +72,24 @@ class GeminiResponse:
 
 
 @dataclass
+class ProjectQuotaStat:
+    model: str
+    rpm_usage: int | None = None
+    rpm_limit: int | None = None
+    tpm_usage: int | None = None
+    tpm_limit: int | None = None
+    rpd_usage: int | None = None
+    rpd_limit: int | None = None
+
+
+@dataclass
 class ChatConfig:
     telegram_update_offset: int | None = None
     enabled: bool = True
     model: str = DEFAULT_MODEL
     system_instruction: str = DEFAULT_SYSTEM_INSTRUCTION
+    google_cloud_project_id: str = DEFAULT_GOOGLE_CLOUD_PROJECT_ID
+    google_quota_project_id: str | None = DEFAULT_GOOGLE_QUOTA_PROJECT_ID
     daily_request_limit: int = DEFAULT_DAILY_REQUEST_LIMIT
     quota_date: str | None = None
     quota_requests: int = 0
@@ -79,6 +120,10 @@ def clean_non_negative_int(value: Any, default: int = 0) -> int:
     except (TypeError, ValueError):
         return default
     return max(parsed, 0)
+
+
+def base64url(data: bytes) -> str:
+    return urlsafe_b64encode(data).decode("ascii").rstrip("=")
 
 
 def fetch_json(
@@ -164,6 +209,14 @@ def load_config(path: Path) -> ChatConfig:
         enabled=bool(data.get("enabled", True)),
         model=normalize_model(str(data.get("model") or DEFAULT_MODEL)),
         system_instruction=str(data.get("system_instruction") or DEFAULT_SYSTEM_INSTRUCTION),
+        google_cloud_project_id=str(
+            data.get("google_cloud_project_id") or DEFAULT_GOOGLE_CLOUD_PROJECT_ID
+        ),
+        google_quota_project_id=(
+            str(data.get("google_quota_project_id"))
+            if data.get("google_quota_project_id")
+            else DEFAULT_GOOGLE_QUOTA_PROJECT_ID
+        ),
         daily_request_limit=clean_non_negative_int(
             data.get("daily_request_limit"),
             DEFAULT_DAILY_REQUEST_LIMIT,
@@ -181,6 +234,8 @@ def save_config(path: Path, config: ChatConfig) -> None:
     data = {
         "daily_request_limit": config.daily_request_limit,
         "enabled": config.enabled,
+        "google_cloud_project_id": config.google_cloud_project_id,
+        "google_quota_project_id": config.google_quota_project_id,
         "model": config.model,
         "quota_date": config.quota_date,
         "quota_output_tokens": config.quota_output_tokens,
@@ -220,6 +275,250 @@ def record_gemini_usage(config: ChatConfig, usage: GeminiUsage) -> None:
 
 def format_count(value: int) -> str:
     return f"{value:,}"
+
+
+def format_quota_value(value: int | None) -> str:
+    if value is None:
+        return "unknown"
+    if value >= UNLIMITED_QUOTA_VALUE:
+        return "unlimited"
+    return format_count(value)
+
+
+def format_quota_pair(usage: int | None, limit: int | None) -> str:
+    used = usage or 0
+    if limit is None:
+        return f"{format_count(used)} / unknown"
+    if limit >= UNLIMITED_QUOTA_VALUE:
+        return f"{format_count(used)} / unlimited"
+    remaining = max(limit - used, 0)
+    return f"{format_count(used)} / {format_count(limit)} ({format_count(remaining)} remaining)"
+
+
+def load_service_account_credentials(raw_credentials: str) -> dict[str, Any]:
+    credentials = json.loads(raw_credentials)
+    required_fields = {"client_email", "private_key"}
+    missing = sorted(field for field in required_fields if not credentials.get(field))
+    if missing:
+        raise ValueError(f"Service account JSON missing: {', '.join(missing)}")
+    return credentials
+
+
+def sign_service_account_jwt(credentials: dict[str, Any], scope: str) -> str:
+    issued_at = int(time.time())
+    header = {"alg": "RS256", "typ": "JWT"}
+    payload = {
+        "iss": credentials["client_email"],
+        "scope": scope,
+        "aud": credentials.get("token_uri") or GOOGLE_OAUTH_TOKEN_URL,
+        "iat": issued_at,
+        "exp": issued_at + 3600,
+    }
+    signing_input = ".".join(
+        [
+            base64url(json.dumps(header, separators=(",", ":")).encode("utf-8")),
+            base64url(json.dumps(payload, separators=(",", ":")).encode("utf-8")),
+        ]
+    ).encode("ascii")
+
+    key_path = ""
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as key_file:
+            key_file.write(credentials["private_key"])
+            key_path = key_file.name
+        result = subprocess.run(
+            ["openssl", "dgst", "-sha256", "-sign", key_path],
+            input=signing_input,
+            capture_output=True,
+            check=True,
+        )
+    finally:
+        if key_path:
+            Path(key_path).unlink(missing_ok=True)
+
+    return f"{signing_input.decode('ascii')}.{base64url(result.stdout)}"
+
+
+def fetch_google_access_token(raw_credentials: str) -> str:
+    credentials = load_service_account_credentials(raw_credentials)
+    payload: dict[str, Any] = {}
+    last_error: Exception | None = None
+    for attempt in range(3):
+        assertion = sign_service_account_jwt(
+            credentials,
+            "https://www.googleapis.com/auth/monitoring.read",
+        )
+        data = urllib.parse.urlencode(
+            {
+                "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                "assertion": assertion,
+            }
+        ).encode("utf-8")
+        try:
+            payload = fetch_json(
+                credentials.get("token_uri") or GOOGLE_OAUTH_TOKEN_URL,
+                data=data,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            break
+        except urllib.error.HTTPError as exc:
+            last_error = exc
+            if exc.code != 400 or attempt == 2:
+                raise
+            time.sleep(5)
+    if not payload and last_error is not None:
+        raise last_error
+
+    token = str(payload.get("access_token") or "")
+    if not token:
+        raise RuntimeError("Google OAuth token response did not include access_token.")
+    return token
+
+
+def point_value(point: dict[str, Any]) -> int | None:
+    value = point.get("value") or {}
+    for key in ("int64Value", "doubleValue"):
+        if key in value:
+            return clean_non_negative_int(value[key])
+    return None
+
+
+def query_monitoring_time_series(
+    project_id: str,
+    access_token: str,
+    metric_type: str,
+    start_time: datetime,
+    end_time: datetime,
+    quota_project_id: str | None = None,
+) -> list[dict[str, Any]]:
+    time_series: list[dict[str, Any]] = []
+    page_token = ""
+    while True:
+        params = {
+            "filter": f'metric.type = "{metric_type}"',
+            "interval.startTime": start_time.astimezone(ZoneInfo("UTC"))
+            .isoformat()
+            .replace("+00:00", "Z"),
+            "interval.endTime": end_time.astimezone(ZoneInfo("UTC"))
+            .isoformat()
+            .replace("+00:00", "Z"),
+            "view": "FULL",
+            "pageSize": "1000",
+        }
+        if page_token:
+            params["pageToken"] = page_token
+        url = f"{MONITORING_TIME_SERIES_URL.format(project=project_id)}?{urllib.parse.urlencode(params)}"
+        headers = {"Authorization": f"Bearer {access_token}"}
+        if quota_project_id:
+            headers["x-goog-user-project"] = quota_project_id
+        payload = fetch_json(url, headers=headers)
+        time_series.extend(payload.get("timeSeries") or [])
+        page_token = str(payload.get("nextPageToken") or "")
+        if not page_token:
+            return time_series
+
+
+def quota_stat_for_model(stats: dict[str, ProjectQuotaStat], model: str) -> ProjectQuotaStat:
+    if model not in stats:
+        stats[model] = ProjectQuotaStat(model=model)
+    return stats[model]
+
+
+def update_project_quota_stats(
+    stats: dict[str, ProjectQuotaStat],
+    series: list[dict[str, Any]],
+    metric_name: str,
+) -> None:
+    is_limit_metric = metric_name.endswith("/limit")
+    for item in series:
+        labels = item.get("metric", {}).get("labels", {})
+        model = labels.get("model")
+        quota_kind = LIMIT_NAME_TO_QUOTA_KIND.get(str(labels.get("limit_name") or ""))
+        if not model or not quota_kind:
+            continue
+
+        values = [point_value(point) for point in item.get("points") or []]
+        numeric_values = [value for value in values if value is not None]
+        if not numeric_values:
+            continue
+
+        selected_value = max(numeric_values)
+        stat = quota_stat_for_model(stats, str(model))
+        field_name = f"{quota_kind}_{'limit' if is_limit_metric else 'usage'}"
+        setattr(stat, field_name, selected_value)
+
+
+def fetch_project_quota_stats(
+    project_id: str,
+    raw_credentials: str,
+    quota_project_id: str | None = None,
+    days: int = PROJECT_QUOTA_DAYS,
+) -> list[ProjectQuotaStat]:
+    access_token = fetch_google_access_token(raw_credentials)
+    end_time = datetime.now(ZoneInfo("UTC"))
+    start_time = end_time - timedelta(days=days)
+    stats: dict[str, ProjectQuotaStat] = {}
+    for metric_name in PROJECT_QUOTA_METRICS.values():
+        series = query_monitoring_time_series(
+            project_id,
+            access_token,
+            metric_name,
+            start_time,
+            end_time,
+            quota_project_id,
+        )
+        update_project_quota_stats(stats, series, metric_name)
+    return sorted(stats.values(), key=lambda stat: stat.model)
+
+
+def format_project_quota_message(
+    config: ChatConfig,
+    stats: list[ProjectQuotaStat],
+    days: int = PROJECT_QUOTA_DAYS,
+) -> str:
+    if not stats:
+        return (
+            "Gemini project quota (free tier):\n"
+            f"Project: {config.google_cloud_project_id}\n"
+            f"No GenerateContent quota usage was found in the last {days} days."
+        )
+
+    lines = [
+        "Gemini project quota (free tier, project-wide):",
+        f"Project: {config.google_cloud_project_id}",
+        f"Quota project: {config.google_quota_project_id or 'default'}",
+        f"Peak usage over last {days} days:",
+    ]
+    for stat in stats:
+        lines.extend(
+            [
+                "",
+                stat.model,
+                f"RPM: {format_quota_pair(stat.rpm_usage, stat.rpm_limit)}",
+                f"TPM: {format_quota_pair(stat.tpm_usage, stat.tpm_limit)}",
+                f"RPD: {format_quota_pair(stat.rpd_usage, stat.rpd_limit)}",
+            ]
+        )
+    lines.append("")
+    lines.append("These are Google Cloud Monitoring quota metrics for the whole project.")
+    return "\n".join(lines)
+
+
+def build_project_quota_message(
+    config: ChatConfig,
+    raw_credentials: str | None,
+) -> str:
+    if not raw_credentials:
+        return (
+            build_quota_message(config)
+            + "\n\nProject-wide quota is unavailable because GOOGLE_SERVICE_ACCOUNT_JSON is not set."
+        )
+    stats = fetch_project_quota_stats(
+        config.google_cloud_project_id,
+        raw_credentials,
+        config.google_quota_project_id,
+    )
+    return format_project_quota_message(config, stats)
 
 
 def normalize_command(text: str) -> tuple[str, str]:
@@ -290,7 +589,11 @@ def build_quota_message(config: ChatConfig) -> str:
     )
 
 
-def update_config_from_command(config: ChatConfig, text: str) -> tuple[str, str | None]:
+def update_config_from_command(
+    config: ChatConfig,
+    text: str,
+    project_quota_builder: Callable[[], str] | None = None,
+) -> tuple[str, str | None]:
     command, arg = normalize_command(text)
 
     if command in {"/start", "/help"}:
@@ -300,7 +603,16 @@ def update_config_from_command(config: ChatConfig, text: str) -> tuple[str, str 
         return build_status_message(config), None
 
     if command == "/quota":
-        return build_quota_message(config), None
+        if project_quota_builder is None:
+            return build_quota_message(config), None
+        try:
+            return project_quota_builder(), None
+        except Exception as exc:
+            return (
+                build_quota_message(config)
+                + f"\n\nProject-wide quota is unavailable right now: {exc}",
+                None,
+            )
 
     if command == "/pause":
         config.enabled = False
@@ -412,6 +724,8 @@ def config_snapshot(config: ChatConfig) -> tuple[Any, ...]:
         config.enabled,
         config.model,
         config.system_instruction,
+        config.google_cloud_project_id,
+        config.google_quota_project_id,
         config.daily_request_limit,
         config.quota_date,
         config.quota_requests,
@@ -427,6 +741,7 @@ def process_telegram_messages(
     gemini_api_key: str,
     config: ChatConfig,
     dry_run: bool,
+    google_service_account_json: str | None = None,
 ) -> bool:
     updates = fetch_telegram_updates(token, config.telegram_update_offset)
     changed = False
@@ -449,7 +764,14 @@ def process_telegram_messages(
             continue
 
         before = config_snapshot(config)
-        reply, prompt = update_config_from_command(config, text)
+        reply, prompt = update_config_from_command(
+            config,
+            text,
+            project_quota_builder=lambda: build_project_quota_message(
+                config,
+                google_service_account_json,
+            ),
+        )
         if config_snapshot(config) != before:
             changed = True
 
@@ -478,6 +800,7 @@ def main() -> int:
     token = env("GEMINI_TELEGRAM_BOT_TOKEN")
     chat_id = env("GEMINI_TELEGRAM_CHAT_ID")
     gemini_api_key = env("GEMINI_API_KEY")
+    google_service_account_json = env("GOOGLE_SERVICE_ACCOUNT_JSON")
     config_path = Path(env("CONFIG_PATH", DEFAULT_CONFIG_PATH) or DEFAULT_CONFIG_PATH)
 
     if not token or not chat_id:
@@ -486,7 +809,14 @@ def main() -> int:
         raise SystemExit("GEMINI_API_KEY is required.")
 
     config = load_config(config_path)
-    if process_telegram_messages(token, chat_id, gemini_api_key or "", config, dry_run):
+    if process_telegram_messages(
+        token,
+        chat_id,
+        gemini_api_key or "",
+        config,
+        dry_run,
+        google_service_account_json,
+    ):
         save_config(config_path, config)
 
     return 0

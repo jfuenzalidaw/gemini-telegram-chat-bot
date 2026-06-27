@@ -46,6 +46,7 @@ jobs:
           GEMINI_TELEGRAM_BOT_TOKEN: ${{ secrets.GEMINI_TELEGRAM_BOT_TOKEN }}
           GEMINI_TELEGRAM_CHAT_ID: ${{ secrets.GEMINI_TELEGRAM_CHAT_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           CONFIG_PATH: config/gemini_chat.json
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
           MONITORING_CYCLES: ${{ github.event_name == 'schedule' && '10' || inputs.monitoring_cycles || '1' }}

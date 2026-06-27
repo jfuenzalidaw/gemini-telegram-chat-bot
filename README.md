@@ -30,6 +30,7 @@ config/gemini_chat.json
    GEMINI_TELEGRAM_CHAT_ID
    GEMINI_API_KEY
    GEMINI_GH_WORKFLOW_PAT
+   GOOGLE_SERVICE_ACCOUNT_JSON
    ```
 
 Do not commit raw tokens, chat IDs, API keys, or passwords. If a key or token was shared in chat or screenshots, rotate it before using this bot long-term.
@@ -50,7 +51,7 @@ Messages starting with `/` are handled as commands and are never sent to Gemini.
 
 Conversation history is not stored in the repository. The config file stores only the Telegram update offset, enabled state, selected model, default system instruction, and bot-tracked daily quota counters.
 
-`/quota` reports requests and tokens used by this bot today, compared with the configured daily request limit in `config/gemini_chat.json`. Gemini quotas are enforced per Google Cloud project, so this command does not include usage from AI Studio, other apps, or other API keys in the same project.
+`/quota` reports project-wide Gemini free-tier quota metrics from Google Cloud Monitoring for the models used in the project over the last 28 days. It shows the same kinds of limits shown in AI Studio's rate-limit page: RPM, TPM, and RPD. If `GOOGLE_SERVICE_ACCOUNT_JSON` is unavailable, the command falls back to bot-local counters.
 
 ## Local Test
 
