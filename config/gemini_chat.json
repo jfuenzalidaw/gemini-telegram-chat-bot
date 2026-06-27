@@ -5,10 +5,10 @@
   "google_quota_project_id": "operations-499021",
   "model": "gemini-3.1-flash-lite",
   "quota_date": "2026-06-26",
-  "quota_output_tokens": 45,
-  "quota_prompt_tokens": 23,
-  "quota_requests": 1,
-  "quota_total_tokens": 190,
+  "quota_output_tokens": 81,
+  "quota_prompt_tokens": 66,
+  "quota_requests": 3,
+  "quota_total_tokens": 269,
   "system_instruction": "You are a concise Telegram assistant. Answer directly and ask a clarifying question only when needed.",
-  "telegram_update_offset": 50791672
+  "telegram_update_offset": 50791674
 }
