@@ -3,7 +3,7 @@
   "enabled": true,
   "google_cloud_project_id": "gen-lang-client-0857616622",
   "google_quota_project_id": "operations-499021",
-  "model": "gemini-2.0-flash",
+  "model": "gemini-3.1-flash-lite",
   "quota_date": "2026-06-26",
   "quota_output_tokens": 45,
   "quota_prompt_tokens": 23,

@@ -14,7 +14,7 @@ class GeminiChatBotTests(unittest.TestCase):
 
         self.assertIsNone(prompt)
         self.assertIn("/pause", reply)
-        self.assertIn("/model gemini-2.0-flash", reply)
+        self.assertIn("/model gemini-3.1-flash-lite", reply)
         self.assertIn("/quota", reply)
         self.assertIn("never sent to Gemini", reply)
 
@@ -114,7 +114,7 @@ class GeminiChatBotTests(unittest.TestCase):
         self.assertIn("RPD: 3 / 20 (17 remaining)", reply)
 
     def test_generate_gemini_reply_sends_expected_request(self):
-        config = gemini_chat_bot.ChatConfig(model="gemini-2.0-flash")
+        config = gemini_chat_bot.ChatConfig(model="gemini-3.1-flash-lite")
         captured = {}
 
         def requester(url, data, headers):
@@ -133,7 +133,7 @@ class GeminiChatBotTests(unittest.TestCase):
         reply = gemini_chat_bot.generate_gemini_reply("secret", config, "hello", requester)
 
         self.assertEqual(reply, "answer")
-        self.assertIn("/models/gemini-2.0-flash:generateContent", captured["url"])
+        self.assertIn("/models/gemini-3.1-flash-lite:generateContent", captured["url"])
         self.assertEqual(captured["headers"]["x-goog-api-key"], "secret")
         self.assertIn("hello", captured["body"])
 
@@ -175,7 +175,7 @@ class GeminiChatBotTests(unittest.TestCase):
         config = gemini_chat_bot.ChatConfig(
             telegram_update_offset=123,
             enabled=False,
-            model="gemini-2.0-flash",
+            model="gemini-3.1-flash-lite",
             system_instruction="Be brief.",
             google_cloud_project_id="project-id",
             google_quota_project_id="quota-project",
