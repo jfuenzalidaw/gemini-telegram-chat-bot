@@ -17,6 +17,10 @@ on:
         description: "Dispatch the next chat polling run when this one finishes."
         required: false
         default: "false"
+      outbound_message:
+        description: "Optional one-off Telegram message to send before polling."
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -40,6 +44,33 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Send outbound Telegram message
+        if: ${{ inputs.outbound_message != '' }}
+        env:
+          GEMINI_TELEGRAM_BOT_TOKEN: ${{ secrets.GEMINI_TELEGRAM_BOT_TOKEN }}
+          GEMINI_TELEGRAM_CHAT_ID: ${{ secrets.GEMINI_TELEGRAM_CHAT_ID }}
+          OUTBOUND_MESSAGE: ${{ inputs.outbound_message }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import urllib.parse
+          import urllib.request
+
+          token = os.environ["GEMINI_TELEGRAM_BOT_TOKEN"]
+          chat_id = os.environ["GEMINI_TELEGRAM_CHAT_ID"]
+          message = os.environ["OUTBOUND_MESSAGE"]
+          data = urllib.parse.urlencode({"chat_id": chat_id, "text": message}).encode("utf-8")
+          request = urllib.request.Request(
+              f"https://api.telegram.org/bot{token}/sendMessage",
+              data=data,
+              headers={"Content-Type": "application/x-www-form-urlencoded"},
+              method="POST",
+          )
+          with urllib.request.urlopen(request, timeout=20) as response:
+              response.read()
+          print("Outbound Telegram message sent.")
+          PY
 
       - name: Poll Telegram and answer with Gemini
         env:
@@ -83,4 +114,5 @@ jobs:
             --ref main \
             -f dry_run=false \
             -f monitoring_cycles=10 \
-            -f continue_monitoring=true
+            -f continue_monitoring=true \
+            -f outbound_message=''
